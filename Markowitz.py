@@ -63,6 +63,10 @@ class EqualWeightPortfolio:
         TODO: Complete Task 1 Below
         """
 
+        weight = 1.0 / len(assets)
+        self.portfolio_weights.loc[:, assets] = weight
+        self.portfolio_weights[self.exclude] = 0.0
+
         """
         TODO: Complete Task 1 Above
         """
@@ -114,7 +118,21 @@ class RiskParityPortfolio:
         TODO: Complete Task 2 Below
         """
 
+        asset_returns = df_returns[assets]
+        for i in range(self.lookback + 1, len(df)):
+            window = asset_returns.iloc[i - self.lookback : i]
+            # Calculate volatility (standard deviation) for each asset
+            vol = window.std()
+            # Handle zero volatility by replacing with a small value to avoid division by zero
+            vol = vol.replace(0, np.nan).fillna(1e-6)
+            # Calculate inverse volatility: 1/σi
+            inv_vol = 1.0 / vol
+            # Normalize: wi = (1/σi) / Σ(1/σj)
+            weights = (inv_vol / inv_vol.sum()).values
+            self.portfolio_weights.loc[df.index[i], assets] = weights
 
+        # Set excluded asset (SPY) to 0
+        self.portfolio_weights[self.exclude] = 0.0
 
         """
         TODO: Complete Task 2 Above
@@ -167,9 +185,11 @@ class MeanVariancePortfolio:
 
         for i in range(self.lookback + 1, len(df)):
             R_n = df_returns.copy()[assets].iloc[i - self.lookback : i]
-            self.portfolio_weights.loc[df.index[i], assets] = self.mv_opt(
-                R_n, self.gamma
-            )
+            solution = self.mv_opt(R_n, self.gamma)
+            self.portfolio_weights.loc[df.index[i], assets] = solution
+
+        # Set excluded asset (SPY) to 0
+        self.portfolio_weights[self.exclude] = 0.0
 
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
@@ -190,8 +210,23 @@ class MeanVariancePortfolio:
 
                 # Sample Code: Initialize Decision w and the Objective
                 # NOTE: You can modify the following code
-                w = model.addMVar(n, name="w", ub=1)
-                model.setObjective(w.sum(), gp.GRB.MAXIMIZE)
+                w = model.addMVar(n, name="w", lb=0, ub=1)
+                
+                # Expected return term: w^T * mu
+                ret_term = mu @ w
+                
+                # Risk term: w^T * Sigma * w (quadratic form)
+                # Note: Covariance matrix should already be PSD
+                risk_term = w @ Sigma @ w
+                
+                # Objective: maximize w^T * mu - (gamma/2) * w^T * Sigma * w
+                if gamma == 0:
+                    model.setObjective(ret_term, gp.GRB.MAXIMIZE)
+                else:
+                    model.setObjective(ret_term - 0.5 * gamma * risk_term, gp.GRB.MAXIMIZE)
+                
+                # Constraint: sum of weights equals 1
+                model.addConstr(w.sum() == 1, name="budget")
 
                 """
                 TODO: Complete Task 3 Above
@@ -212,11 +247,10 @@ class MeanVariancePortfolio:
 
                 if model.status == gp.GRB.OPTIMAL or model.status == gp.GRB.SUBOPTIMAL:
                     # Extract the solution
-                    solution = []
-                    for i in range(n):
-                        var = model.getVarByName(f"w[{i}]")
-                        # print(f"w {i} = {var.X}")
-                        solution.append(var.X)
+                    solution = w.X.tolist()
+                else:
+                    # Fallback to equal weights if optimization fails
+                    solution = (np.ones(n) / n).tolist()
 
         return solution
 
